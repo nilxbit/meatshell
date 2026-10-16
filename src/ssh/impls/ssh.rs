@@ -4,7 +4,10 @@
 //! on the shared Tokio runtime; commands come in via an MPSC channel and
 //! output lines are pushed back via an `UnboundedSender<SessionEvent>`.
 
-use std::path::Path;
+use std::fs::File;
+use std::io::BufReader;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
@@ -16,7 +19,8 @@ use russh::{Channel, ChannelId, ChannelMsg, Disconnect};
 use ssh_key::{HashAlg, PublicKey};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
-
+use x11rb_protocol::parse_display::ParsedDisplay;
+use x11rb_protocol::xauth::Family;
 use crate::config::{AuthMethod, PortForward, Secret, Session, SessionTrigger};
 use crate::i18n::t;
 
@@ -1038,6 +1042,7 @@ async fn connect_ssh(
         host: session.host.clone(),
         port: session.port,
         remote_forwards: remote_forwards.clone(),
+        x11_display: session.x11_display.clone(),
         events: events.clone(),
         host_key_wait: HostKeyWait::default(),
     };
@@ -1569,6 +1574,97 @@ fn append_bounded(target: &mut Vec<u8>, data: &[u8], limit: usize, truncated: &m
     *truncated |= take < data.len();
 }
 
+fn x11_get_auth(parsed_display: ParsedDisplay, x11_xauthority: String) -> Result<(String, String)> {
+    let x11_authentication_protocol: String;
+    let x11_authentication_cookie: String;
+
+    let auth_family;
+    let auth_address : Vec<u8>;
+
+    match parsed_display.protocol {
+        Some(protocol) => {
+            match protocol.as_str() {
+                "unix" => {
+                    auth_family = Family::LOCAL;
+                    let hostname = hostname::get()?
+                        .into_string()
+                        .unwrap_or_default();
+                    auth_address = Vec::from(hostname.as_bytes());
+                }
+                _ => {
+                    tracing::warn!("unsupported DISPLAY protocol: {protocol}");
+                    auth_family = Family::WILD;
+                    auth_address = Vec::from(parsed_display.host.as_bytes());
+                }
+            }
+        }
+        None => {
+            if parsed_display.host.is_empty() ||
+                parsed_display.host == "localhost" {
+                auth_family = Family::LOCAL;
+                let hostname = hostname::get()?
+                    .into_string()
+                    .unwrap_or_default();
+                auth_address = Vec::from(hostname.as_bytes());
+            } else {
+                match parsed_display.host.parse::<IpAddr>() {
+                    Ok(host) => {
+                        if host.is_loopback() {
+                            auth_family = Family::LOCAL;
+                            let hostname = hostname::get()?
+                                .into_string()
+                                .unwrap_or_default();
+                            auth_address = Vec::from(hostname.as_bytes());
+                        } else {
+                            auth_family = match host {
+                                IpAddr::V4(_) => Family::INTERNET,
+                                IpAddr::V6(_) => Family::INTERNET6,
+                            };
+
+                            let octets: Vec<u8> = match host {
+                                IpAddr::V4(v4) => v4.octets().to_vec(),
+                                IpAddr::V6(v6) => v6.octets().to_vec(),
+                            };
+                            auth_address = octets;
+                        }
+                    }
+                    Err(_) => {
+                        auth_family = Family::SERVER_INTERPRETED;
+                        auth_address = Vec::from(parsed_display.host.as_bytes());
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(Some((auth_name, auth_data))) =
+        if !x11_xauthority.is_empty() {
+            File::open(PathBuf::from(x11_xauthority.as_str()))
+                .map(|file|
+                    x11rb_protocol::xauth::get_auth_from(
+                    BufReader::new(file),
+                    auth_family,
+                    &auth_address,
+                    parsed_display.display
+                ))?
+        } else {
+            x11rb_protocol::xauth::get_auth(
+                auth_family,
+                &auth_address,
+                parsed_display.display)
+        }
+    {
+        x11_authentication_protocol = String::from_utf8_lossy(&auth_name).to_string();
+        x11_authentication_cookie = hex::encode(auth_data);
+    } else {
+        tracing::warn!("xauth key data not generated.");
+        x11_authentication_protocol = String::new();
+        x11_authentication_cookie = String::new();
+    }
+
+    Ok((x11_authentication_protocol, x11_authentication_cookie))
+}
+
 async fn run_session(
     session: Session,
     jump: Vec<Session>,
@@ -1654,6 +1750,40 @@ async fn run_session(
         handle.channel_open_session(),
     )
     .await?;
+
+    if session.x11_forwarding_enabled {
+        let display;
+        if session.x11_display.is_empty() {
+            display = None;
+        } else {
+            display = Some(session.x11_display.as_str());
+        }
+
+        match x11rb_protocol::parse_display::parse_display(display) {
+            Ok(parsed_display) => {
+                match x11_get_auth(parsed_display.clone(),
+                                   session.x11_xauthority.clone()) {
+                    Ok(x11_auth) => {
+                        network_stage(
+                            &format!("request x11 at {}:{}", session.host, session.port),
+                            channel.request_x11(
+                                true,
+                                false,
+                                x11_auth.0,
+                                x11_auth.1,
+                                parsed_display.screen as u32,
+                            ),
+                        )
+                            .await?;
+                    }
+                    Err(e) => {
+                        tracing::warn!("get x11 auth data failed: {e}")
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("parse x11 display failed: {e}"),
+        }
+    }
 
     network_stage(
         &format!("request PTY at {}:{}", session.host, session.port),
@@ -2942,6 +3072,7 @@ pub(crate) struct ClientHandler {
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) remote_forwards: RemoteForwardMap,
+    pub(crate) x11_display: String,
     pub(crate) events: UnboundedSender<SessionEvent>,
     host_key_wait: HostKeyWait,
 }
@@ -3131,6 +3262,95 @@ impl Handler for ClientHandler {
                 }
             }
         });
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self, channel: Channel<Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session
+    ) -> std::result::Result<(), Self::Error> {
+        let display;
+        if self.x11_display.is_empty() {
+            display = None;
+        } else {
+            display = Some(self.x11_display.as_str());
+        }
+
+        match x11rb_protocol::parse_display::parse_display(display) {
+            Ok(parsed_display) => {
+                {
+                    #[cfg(all(unix))]
+                    {
+                        let path: String;
+                        match parsed_display.protocol.clone() {
+                            Some(protocol) => {
+                                if protocol == "unix" {
+                                    path = parsed_display.host.clone();
+                                } else {
+                                    path = String::new();
+                                }
+                            }
+                            None => {
+                                if parsed_display.host.is_empty() {
+                                    path = String::from("/tmp/.X11-unix/X") +
+                                        parsed_display.display.to_string().as_str();
+                                } else {
+                                    path = String::new();
+                                }
+                            }
+                        }
+
+                        if !path.is_empty() {
+                            tokio::spawn(async move {
+                                match tokio::net::UnixStream::connect(path.clone()).await {
+                                    Ok(mut unix) => {
+                                        let mut stream = channel.into_stream();
+                                        let _ = tokio::io::copy_bidirectional(&mut unix, &mut stream).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("failed to connect to {path}: {e}");
+                                        let _ = channel.close().await;
+                                    }
+                                }
+                            });
+
+                            return Ok(());
+                        }
+                    }
+
+                    match parsed_display.protocol.clone() {
+                        Some(protocol) => {
+                            tracing::warn!("x11 forwarding error: unsupported DISPLAY protocol: {}",
+                                protocol);
+                            let _ = channel.close().await;
+                        }
+                        None => {
+                            let port : u16 = 6000 + parsed_display.display;
+                            let address = format!("{}:{}", parsed_display.host, port);
+                            tokio::spawn(async move {
+                                match tokio::net::TcpStream::connect(address.clone()).await {
+                                    Ok(mut tcp) => {
+                                        let mut stream = channel.into_stream();
+                                        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("failed to connect to {address}: {e}");
+                                        let _ = channel.close().await;
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("x11 forwarding error: {e}");
+                let _ = channel.close().await;
+            }
+        }
+
         Ok(())
     }
 }
