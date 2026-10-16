@@ -72,6 +72,11 @@ export struct SessionDraft {
     allow-secret-reveal: bool,
     // Expose this session to MCP clients (#432).
     allow-mcp-access: bool,
+    // X11 forwarding
+    x11-forwarding-enabled: bool,
+    x11-display: string,    // ":0.0" | ":0" | "host:dislpay_number.sreen_number"
+    x11-authentication-protocol: string, // "MIT-MAGIC-COOKIE-1"
+    x11-authentication-cookie: string,
 }
 
 // A single segment in a segmented selector (auth toggle, baud presets, …).
@@ -734,6 +739,10 @@ export component SessionDialog inherits ModalLayer {
     callback update-jump(int, int);
     callback delete-jump(int);
     callback move-jump(int, int);
+    in-out property <bool> draft-x11-forwarding-enabled;
+    in-out property <string> draft-x11-display;
+    in-out property <string> draft-x11-authentication-protocol;
+    in-out property <string> draft-x11-authentication-cookie;
     in-out property <string> draft-serial-port;
     in property <[string]> session-serial-ports;   // existing serial-ports for the dropdown
     in-out property <string> draft-baud: "115200";
@@ -771,6 +780,10 @@ export component SessionDialog inherits ModalLayer {
     changed draft-key-inline => { root.connection-draft-changed(); }
     changed draft-proxy-type => { root.connection-draft-changed(); }
     changed draft-proxy-hostport => { root.connection-draft-changed(); }
+    changed draft-x11-forwarding-enabled => { root.connection-draft-changed(); }
+    changed draft-x11-display => { root.connection-draft-changed(); }
+    changed draft-x11-authentication-protocol => { root.connection-draft-changed(); }
+    changed draft-x11-authentication-cookie => { root.connection-draft-changed(); }
     changed draft-serial-port => { root.connection-draft-changed(); }
     changed draft-baud => { root.connection-draft-changed(); }
     changed draft-data-bits => { root.connection-draft-changed(); }
@@ -820,6 +833,10 @@ export component SessionDialog inherits ModalLayer {
             jumps: root.jumps,
             allow-secret-reveal: root.allow-secret-reveal,
             allow-mcp-access: root.allow-mcp-access,
+            x11-forwarding-enabled: root.draft-x11-forwarding-enabled,
+            x11-display: root.draft-x11-display,
+            x11-authentication-protocol: root.draft-x11-authentication-protocol,
+            x11-authentication-cookie: root.draft-x11-authentication-cookie,
         });
     }
 
@@ -1431,7 +1448,7 @@ export component SessionDialog inherits ModalLayer {
                 HorizontalLayout {
                     spacing: 4px;
                     Text {
-                        text: @tr("Advanced (encoding, proxy, tunnels)");
+                        text: @tr("Advanced (encoding, proxy, tunnels, X11 forwarding)");
                         color: adv-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
                         font-size: Theme.fs-sm;
                         vertical-alignment: center;
@@ -1663,6 +1680,56 @@ export component SessionDialog inherits ModalLayer {
                 }
             }
 
+            // ── X11 forwarding (SSH only) ──────────────────
+            if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: @tr("X11 forwarding");
+                    color: Theme.text-secondary;
+                    font-size: Theme.fs-sm;
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle {
+                        width: 16px; height: 16px; border-radius: 3px;
+                        border-width: 1px; border-color: Theme.border-subtle;
+                        background: root.draft-x11-forwarding-enabled ? Theme.accent : Theme.bg-root;
+                        TouchArea { clicked => { root.draft-x11-forwarding-enabled = !root.draft-x11-forwarding-enabled; } }
+                        Text { text: root.draft-x11-forwarding-enabled ? "X" : ""; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Text { text: @tr("Enable X11 forwarding"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                }
+
+                LabeledInput {
+                    input-background: Theme.bg-elevated;
+                    idle-border: Theme.border-strong;
+                    label: @tr("X11 Server Display");
+                    placeholder: ":0.0";
+                    value <=> root.draft-x11-display;
+                    horizontal-stretch: 1;
+                }
+
+                LabeledInput {
+                    input-background: Theme.bg-elevated;
+                    idle-border: Theme.border-strong;
+                    label: @tr("X11 authentication protocol");
+                    placeholder: "MIT-MAGIC-COOKIE-1";
+                    value <=> root.draft-x11-authentication-protocol;
+                    horizontal-stretch: 1;
+                }
+
+                LabeledInput {
+                    input-background: Theme.bg-elevated;
+                    idle-border: Theme.border-strong;
+                    label: @tr("X11 authentication cookie");
+                    placeholder: "";
+                    value <=> root.draft-x11-authentication-cookie;
+                    horizontal-stretch: 1;
+                }
+            }
+
             HorizontalLayout {
                 spacing: 8px;
                 GhostButton {
@@ -1712,6 +1779,10 @@ export component SessionDialog inherits ModalLayer {
                             jumps: root.jumps,
                             allow-secret-reveal: root.allow-secret-reveal,
                             allow-mcp-access: root.allow-mcp-access,
+                            x11-forwarding-enabled: root.draft-x11-forwarding-enabled,
+                            x11-display: root.draft-x11-display,
+                            x11-authentication-protocol: root.draft-x11-authentication-protocol,
+                            x11-authentication-cookie: root.draft-x11-authentication-cookie,
                         });
                     }
                 }

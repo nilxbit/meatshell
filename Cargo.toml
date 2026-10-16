@@ -137,6 +137,8 @@ ureq = { version = "2", features = ["tls"] }
 # .ico embedded by winresource at link time; on macOS from the app bundle.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
 
+x11rb-protocol = "0.14.0"
+
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # Keep SSH sessions alive after the main window is hidden in the system tray.
 # Not on macOS (#486): tray-icon brings muda 0.20, while Slint's winit backend
@@ -150,6 +152,8 @@ tray-icon = { version = "0.25.1", default-features = false }
 # Feature is additive over the base `arboard = "3"` dependency above.
 arboard = { version = "3", features = ["wayland-data-control"] }
 tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
+hostname = "0.4.2"
+hex = "0.4.3"
 
 # Use jemalloc on Unix-like desktop/mobile targets. Unsupported targets keep
 # Rust's portable System allocator without pulling in platform dependencies.

@@ -1124,6 +1124,7 @@ async fn connect_ssh(
         host: session.host.clone(),
         port: session.port,
         remote_forwards: remote_forwards.clone(),
+        x11_display: session.x11_display.clone(),
         events: events.clone(),
         host_key_wait: HostKeyWait::default(),
     };
@@ -1678,6 +1679,75 @@ async fn run_session(
         handle.channel_open_session(),
     )
     .await?;
+
+    if session.x11_forwarding_enabled {
+        let display : Option<&str>;
+        if session.x11_display.is_empty() {
+            display = None;
+        } else {
+            display = Some(session.x11_display.as_str());
+        }
+
+        match x11rb_protocol::parse_display::parse_display(display) {
+            Ok(parsed_display) => {
+                let x11_authentication_protocol: String;
+                let x11_authentication_cookie: String;
+
+                #[cfg(target_os = "linux")]
+                {
+                    if parsed_display.host.is_empty() {
+                        let hostname = hostname::get()
+                            .unwrap()
+                            .into_string()
+                            .unwrap();
+                        let address = hostname.as_bytes();
+
+                        if let Ok(Some((auth_name, auth_data))) =
+                            x11rb_protocol::xauth::get_auth(
+                                x11rb_protocol::xauth::Family::LOCAL,
+                                address,
+                                parsed_display.display) {
+                            if session.x11_authentication_protocol.is_empty() {
+                                x11_authentication_protocol = String::from_utf8_lossy(&auth_name).to_string();
+                            } else {
+                                x11_authentication_protocol = session.x11_authentication_protocol.clone();
+                            }
+                            if session.x11_authentication_cookie.is_empty() {
+                                x11_authentication_cookie = hex::encode(auth_data);
+                            } else {
+                                x11_authentication_cookie = session.x11_authentication_cookie.clone();
+                            }
+
+                        } else {
+                            x11_authentication_protocol = session.x11_authentication_protocol.clone();
+                            x11_authentication_cookie = session.x11_authentication_cookie.clone();
+                        }
+                    } else {
+                        x11_authentication_protocol = session.x11_authentication_protocol.clone();
+                        x11_authentication_cookie = session.x11_authentication_cookie.clone();
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    x11_authentication_protocol = session.x11_authentication_protocol.clone();
+                    x11_authentication_cookie = session.x11_authentication_cookie.clone();
+                }
+
+                network_stage(
+                    &format!("request x11 at {}:{}", session.host, session.port),
+                    channel.request_x11(
+                        true,
+                        false,
+                        x11_authentication_protocol,
+                        x11_authentication_cookie,
+                        parsed_display.screen as u32,
+                    ),
+                )
+                    .await?;
+            }
+            Err(e) => tracing::warn!("request x11 failed: {e}"),
+        }
+    }
 
     network_stage(
         &format!("request PTY at {}:{}", session.host, session.port),
@@ -2949,6 +3019,7 @@ pub(crate) struct ClientHandler {
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) remote_forwards: RemoteForwardMap,
+    pub(crate) x11_display: String,
     pub(crate) events: UnboundedSender<SessionEvent>,
     host_key_wait: HostKeyWait,
 }
@@ -3138,6 +3209,70 @@ impl Handler for ClientHandler {
                 }
             }
         });
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self, channel: Channel<Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session
+    ) -> std::result::Result<(), Self::Error> {
+        let display : Option<&str>;
+        if self.x11_display.is_empty() {
+            display = None;
+        }
+        else {
+            display = Some(self.x11_display.as_str());
+        }
+        match x11rb_protocol::parse_display::parse_display(display) {
+            Ok(parsed_display) => {
+                {
+                    #[cfg(target_os = "linux")]
+                    {
+                        if parsed_display.host.is_empty() {
+                            let sock = String::from("/tmp/.X11-unix/X") + parsed_display.display.to_string().as_str();
+                            let s = sock.clone();
+                            tokio::spawn(async move {
+                                match tokio::net::UnixStream::connect(sock).await {
+                                    Ok(mut unix) => {
+                                        let mut stream = channel.into_stream();
+                                        let _ = tokio::io::copy_bidirectional(&mut unix, &mut stream).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("failed to connect to {s}: {e}");
+                                        let _ = channel.close().await;
+                                    }
+                                }
+                            });
+
+                            return Ok(());
+                        }
+                    }
+
+                    let port : u16 = 6000 + parsed_display.display;
+                    let address = format!("{}:{}", parsed_display.host, port);
+                    let addr = address.clone();
+                    tokio::spawn(async move {
+                        match tokio::net::TcpStream::connect(address).await {
+                            Ok(mut tcp) => {
+                                let mut stream = channel.into_stream();
+                                let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to connect to {addr}: {e}");
+                                let _ = channel.close().await;
+                            }
+                        }
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::warn!("x11 forwarding error: {e}");
+                let _ = channel.close().await;
+            }
+        }
+
         Ok(())
     }
 }
