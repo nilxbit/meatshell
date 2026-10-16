@@ -182,6 +182,12 @@ pub struct Session {
     #[serde(default = "default_true")]
     pub mcp_access: bool,
     #[serde(default)]
+    pub x11_forwarding_enabled: bool,
+    #[serde(default)]
+    pub x11_display: String,
+    #[serde(default)]
+    pub x11_xauthority : String,
+    #[serde(default)]
     pub last_used: Option<String>,
     /// Optional folder/group name to organize sessions in the list (#41).
     /// Empty = ungrouped. Sessions are grouped by this in Quick Connect.
@@ -383,6 +389,9 @@ impl Session {
             jump_session_ids: Vec::new(),
             allow_secret_reveal: false,
             mcp_access: true,
+            x11_forwarding_enabled: false,
+            x11_display: String::new(),
+            x11_xauthority: String::new(),
             last_used: None,
             group: String::new(),
             kind: SessionKind::Ssh,
