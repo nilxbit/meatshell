@@ -1671,43 +1671,10 @@ fn x11_get_auth(parsed_display: ParsedDisplay, x11_xauthority: String) -> (Strin
                 parsed_display.display
             )
         } else {
-            let xauthority;
-            #[cfg(windows)]
-            {
-                match std::env::var_os("XAUTHORITY") {
-                    Some(_) => { xauthority = String::new(); }
-                    None => {
-                        match home::home_dir() {
-                            Some(mut path) => {
-                                path.push(".Xauthority");
-                                xauthority = path.into_os_string().into_string().unwrap();
-                            }
-                            None => {
-                                xauthority = String::new();
-                                tracing::warn!("cannot set the XAUTHORITY environment variable.");
-                            }
-                        }
-                    }
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                xauthority = String::new();
-            }
-
-            if !xauthority.is_empty() {
-                x11rb_protocol::xauth::get_auth_from(
-                    xauthority.as_str(),
-                    auth_family,
-                    &auth_address,
-                    parsed_display.display
-                )
-            } else {
-                x11rb_protocol::xauth::get_auth(
-                    auth_family,
-                    &auth_address,
-                    parsed_display.display)
-            }
+            x11rb_protocol::xauth::get_auth(
+                auth_family,
+                &auth_address,
+                parsed_display.display)
         }
     {
         x11_authentication_protocol = String::from_utf8_lossy(&auth_name).to_string();

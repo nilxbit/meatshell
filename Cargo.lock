@@ -8482,7 +8482,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 [[package]]
 name = "x11rb-protocol"
 version = "0.14.0"
-source = "git+https://github.com/nilxbit/x11rb.git?rev=c2950f255921b3f8a018535317390917e35f0590#c2950f255921b3f8a018535317390917e35f0590"
+source = "git+https://github.com/nilxbit/x11rb.git?rev=25bffcb6f20f7485f01a450a553beb9d5753939d#25bffcb6f20f7485f01a450a553beb9d5753939d"
 
 [[package]]
 name = "xattr"
