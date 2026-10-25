@@ -4,9 +4,11 @@
 //! on the shared Tokio runtime; commands come in via an MPSC channel and
 //! output lines are pushed back via an `UnboundedSender<SessionEvent>`.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::net::IpAddr;
-use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -1596,38 +1598,9 @@ fn append_bounded(target: &mut Vec<u8>, data: &[u8], limit: usize, truncated: &m
     *truncated |= take < data.len();
 }
 
-static GLOBAL_COUNTER: OnceLock<Mutex<u32>> = OnceLock::new();
-
 fn x11_get_auth(parsed_display: ParsedDisplay, x11_xauthority: String) -> (String, String) {
-    let _lock = GLOBAL_COUNTER.get_or_init(|| Mutex::new(0)).lock().unwrap();
-
     let x11_authentication_protocol: String;
     let x11_authentication_cookie: String;
-
-    let mut old_x11_xauthority = None;
-
-    if !x11_xauthority.is_empty() {
-        old_x11_xauthority = std::env::var_os("XAUTHORITY");
-        std::env::set_var("XAUTHORITY", x11_xauthority);
-    } else {
-        #[cfg(windows)]
-        {
-            match std::env::var_os("XAUTHORITY") {
-                Some(_) => {}
-                None => {
-                    match home::home_dir() {
-                        Some(mut path) => {
-                            path.push(".Xauthority");
-                            std::env::set_var("XAUTHORITY", path.into_os_string());
-                        }
-                        None => {
-                            tracing::warn!("cannot set the XAUTHORITY environment variable.");
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     let auth_family;
     let auth_address : Vec<u8>;
@@ -1692,25 +1665,28 @@ fn x11_get_auth(parsed_display: ParsedDisplay, x11_xauthority: String) -> (Strin
     }
 
     if let Ok(Some((auth_name, auth_data))) =
-        x11rb_protocol::xauth::get_auth(
-            auth_family,
-            &auth_address,
-            parsed_display.display) {
+        if !x11_xauthority.is_empty() {
+            File::open(PathBuf::from(x11_xauthority.as_str()))
+                .map(|file|
+                    x11rb_protocol::xauth::get_auth_from(
+                    BufReader::new(file),
+                    auth_family,
+                    &auth_address,
+                    parsed_display.display
+                )).unwrap()
+        } else {
+            x11rb_protocol::xauth::get_auth(
+                auth_family,
+                &auth_address,
+                parsed_display.display)
+        }
+    {
         x11_authentication_protocol = String::from_utf8_lossy(&auth_name).to_string();
         x11_authentication_cookie = hex::encode(auth_data);
     } else {
         tracing::warn!("xauth key data not generated.");
         x11_authentication_protocol = String::new();
         x11_authentication_cookie = String::new();
-    }
-
-    match old_x11_xauthority {
-        Some(val) => {
-            std::env::set_var("XAUTHORITY", val);
-        }
-        None => {
-            std::env::remove_var("XAUTHORITY");
-        }
     }
 
     (x11_authentication_protocol, x11_authentication_cookie)
