@@ -146,10 +146,9 @@ tar = "0.4"
 # .ico embedded by winresource at link time; on macOS from the app bundle.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
 
-x11rb-protocol = "0.14.0"
+x11rb-protocol = { git = "https://github.com/psychon/x11rb.git", rev = "2a2507e82172e533d9c789341abae88813195dd4" }
 hostname = "0.4.2"
 hex = "0.4.3"
-home = "0.5.12"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # Keep SSH sessions alive after the main window is hidden in the system tray.
