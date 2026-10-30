@@ -3633,7 +3633,6 @@ dependencies = [
  "glob",
  "hex",
  "hmac",
- "home",
  "hostname",
  "i-slint-backend-winit",
  "iana-time-zone",
@@ -8488,8 +8487,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 [[package]]
 name = "x11rb-protocol"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
+source = "git+https://github.com/psychon/x11rb.git?rev=2a2507e82172e533d9c789341abae88813195dd4#2a2507e82172e533d9c789341abae88813195dd4"
 
 [[package]]
 name = "xattr"
